@@ -1,7 +1,7 @@
 "use strict";
 // Función del proyecto Prebills (Catalyst). Todo pasa por ReportesSandbox (core/PrebillApiClient).
-// FASE 1: hasta "autorizada", sin escribir en Books (ver services/PrebillService.js). Facturar y
-// deshacer factura no tienen ruta a propósito.
+// FASE 2: facturar, deshacer factura y editar con la factura en borrador ESCRIBEN EN BOOKS
+// (aprobado por el usuario, 2026-11-13). Las reglas están en services/PrebillService.js.
 import express from 'express';
 import dotenv from 'dotenv';
 import PrebillService from './services/PrebillService.js';
@@ -34,6 +34,7 @@ app.patch('/:organizationId/prebills/:prebillId/descuento-ajuste', route('Error 
 app.patch('/:organizationId/prebills/:prebillId/idioma', route('Error interno guardando el idioma.', req => prebills(req).idioma(id(req), req.body)));
 app.patch('/:organizationId/prebills/:prebillId/tipo-cambio', route('Error interno guardando el tipo de cambio.', req => prebills(req).tipoCambio(id(req), req.body)));
 app.post('/:organizationId/prebills/:prebillId/estado', route('Error interno cambiando el estado.', req => prebills(req).estado(id(req), req.body)));
+app.post('/:organizationId/prebills/:prebillId/deshacer-factura', route('Error interno deshaciendo la factura.', req => prebills(req).deshacerFactura(id(req))));
 app.delete('/:organizationId/prebills/:prebillId', route('Error interno eliminando la Prebill.', req => prebills(req).remove(id(req))));
 
 // ── Lecturas permitidas (GET /:organizationId/<catalogo>) y filtros que se reenvían ──

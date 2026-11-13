@@ -1,17 +1,23 @@
 import PrebillApiClient from '../core/PrebillApiClient.js';
 
-// Prebills en ReportesSandbox. FASE 1 (decisión del usuario, 2026-11-13): todo hasta "autorizada",
-// SIN escribir en Books. Por eso:
-//   - No se puede pasar a "facturada" (crea la Invoice en Books) ni deshacer una factura (la borra).
-//   - Una Prebill ya facturada no se edita desde aquí: con la factura en borrador, cambiar líneas o
-//     idioma también modifica la factura en Books. Se revisa el estado antes de cada edición.
+// Prebills en ReportesSandbox. FASE 2 (aprobada por el usuario, 2026-11-13, opción "todo"):
+//   - Facturar (autorizada → facturada) CREA la factura en Books (borrador). Solo desde autorizada;
+//     si la vista previa tiene bloqueos, ReportesSandbox responde 409 antes de tocar Books.
+//   - Deshacer factura BORRA la factura en Books y regresa la Prebill a autorizada. Solo si la
+//     factura sigue en borrador (etapa factura_borrador).
+//   - Con la factura en borrador, cambiar líneas o idioma también ACTUALIZA la factura en Books.
+//     Se revisa /edicion antes: si ya se envió, tiene pagos o está vencida, no se intenta.
+//   - Nunca se crean usuarios ni contactos en Books. ReportesSandbox protege contra doble factura.
 export class PrebillError extends Error {
     constructor(message, status = 400, extra = {}) { super(message); this.status = status; Object.assign(this, extra); }
 }
 
 export const MONEDAS = ['MXN', 'USD', 'EUR'];
 export const EDITABLES = ['borrador', 'en_revision', 'autorizada'];
-export const AVANCES = ['en_revision', 'autorizada']; // "facturada" queda para la fase 2
+export const AVANCES = ['en_revision', 'autorizada', 'facturada'];
+// Catalyst corta una función Advanced I/O a los 30 s: se espera a Books hasta 27 s y, si no
+// responde, se contesta "resultado por verificar" (ReportesSandbox termina y evita doble factura).
+export const BOOKS_TIMEOUT = 27000;
 const LINEAS = ['agregar_tiempo_id', 'quitar_tiempo_id', 'agregar_gasto_id', 'quitar_gasto_id', 'agregar_cargo_fijo_id', 'quitar_cargo_fijo_id'];
 const TIPOS_DESCUENTO = ['monto', 'porcentaje', ''];
 const MAX_IDS = 500;
@@ -90,8 +96,7 @@ export function validateTipoCambio(body) {
 
 export function validateEstado(body) {
     if (!isObject(body)) throw new PrebillError('Se requiere un objeto JSON.');
-    if (body.nuevo_estado === 'facturada') throw new PrebillError('Facturar crea la factura en Books y todavía no está habilitado aquí. Hazlo desde Aptus.', 403);
-    if (!AVANCES.includes(body.nuevo_estado)) throw new PrebillError('nuevo_estado debe ser en_revision o autorizada.');
+    if (!AVANCES.includes(body.nuevo_estado)) throw new PrebillError('nuevo_estado debe ser en_revision, autorizada o facturada.');
     return { nuevo_estado: body.nuevo_estado };
 }
 
@@ -119,16 +124,19 @@ export default class PrebillService {
         return this.api.request('get', `/prebills/${id}/${what}`, { stage: what.replace('-', '_') });
     }
 
-    // Antes de editar: la Prebill no debe estar facturada (ni facturándose).
-    async editable(id, allowed = EDITABLES) {
+    // allowed: estados en que se permite. Con conFactura, una facturada también, si su factura
+    // sigue en borrador en Books (lo dice /edicion, que consulta Books sin escribir).
+    async editable(id, allowed = EDITABLES, { conFactura = false } = {}) {
         const prebill = await this.get(id);
         const status = statusOf(prebill);
-        if (!allowed.includes(status)) {
-            throw new PrebillError(status === 'facturada' || status === 'facturando'
-                ? 'Esta Prebill ya está facturada: cambiarla también cambiaría la factura en Books. Hazlo desde Aptus.'
-                : `En estado "${status}" no se puede hacer este cambio.`, 409, { stage: 'estado_prebill' });
+        if (allowed.includes(status)) return { prebill, enBooks: false };
+        if (status === 'facturando') throw new PrebillError('La Prebill se está facturando en este momento. Espera y actualiza.', 409, { stage: 'estado_prebill' });
+        if (conFactura && status === 'facturada') {
+            const edicion = await this.api.request('get', `/prebills/${id}/edicion`, { stage: 'edicion' });
+            if (edicion?.editable === true && edicion.etapa === 'factura_borrador') return { prebill, enBooks: true, edicion };
+            throw new PrebillError(edicion?.motivo || 'La factura ya no se puede modificar.', 409, { stage: 'estado_prebill' });
         }
-        return prebill;
+        throw new PrebillError(`En estado "${status}" no se puede hacer este cambio.`, 409, { stage: 'estado_prebill' });
     }
 
     async create(body) {
@@ -141,8 +149,8 @@ export default class PrebillService {
     async lineas(id, body) {
         this.check(id);
         const payload = validateLineas(body);
-        await this.editable(id);
-        return this.api.request('patch', `/prebills/${id}/lineas`, { data: payload, stage: 'lineas_prebill' });
+        const { enBooks } = await this.editable(id, EDITABLES, { conFactura: true });
+        return this.api.request('patch', `/prebills/${id}/lineas`, { data: payload, stage: 'lineas_prebill', timeout: enBooks ? BOOKS_TIMEOUT : 30000 });
     }
 
     async descuentoAjuste(id, body) {
@@ -155,8 +163,8 @@ export default class PrebillService {
     async idioma(id, body) {
         this.check(id);
         const payload = validateIdioma(body);
-        await this.editable(id);
-        return this.api.request('patch', `/prebills/${id}/idioma`, { data: payload, stage: 'idioma_prebill' });
+        const { enBooks } = await this.editable(id, EDITABLES, { conFactura: true });
+        return this.api.request('patch', `/prebills/${id}/idioma`, { data: payload, stage: 'idioma_prebill', timeout: enBooks ? BOOKS_TIMEOUT : 30000 });
     }
 
     async tipoCambio(id, body) {
@@ -169,8 +177,27 @@ export default class PrebillService {
     async estado(id, body) {
         this.check(id);
         const payload = validateEstado(body);
-        await this.editable(id);
-        return this.api.request('post', `/prebills/${id}/estado`, { data: payload, stage: 'estado_prebill' });
+        if (payload.nuevo_estado !== 'facturada') {
+            await this.editable(id);
+            return this.api.request('post', `/prebills/${id}/estado`, { data: payload, stage: 'estado_prebill' });
+        }
+        // Facturar: solo desde autorizada. Los bloqueos los revisa ReportesSandbox (409) antes de Books.
+        await this.editable(id, ['autorizada']);
+        const data = await this.api.request('post', `/prebills/${id}/estado`, { data: payload, stage: 'facturar_prebill', timeout: BOOKS_TIMEOUT });
+        if (!data || !Number.isInteger(data.id)) throw unexpected('la Prebill facturada');
+        return data;
+    }
+
+    // Borra la factura en Books (solo si sigue en borrador) y regresa la Prebill a autorizada.
+    async deshacerFactura(id) {
+        this.check(id);
+        const prebill = await this.get(id);
+        if (statusOf(prebill) !== 'facturada') throw new PrebillError('Solo se deshace la factura de una Prebill facturada.', 409, { stage: 'estado_prebill' });
+        const edicion = await this.api.request('get', `/prebills/${id}/edicion`, { stage: 'edicion' });
+        if (edicion?.etapa !== 'factura_borrador') throw new PrebillError(edicion?.motivo || 'La factura ya no está en borrador; anúlala en Books.', 409, { stage: 'estado_prebill' });
+        const data = await this.api.request('post', `/prebills/${id}/deshacer-factura`, { data: {}, stage: 'deshacer_factura', timeout: BOOKS_TIMEOUT });
+        if (!data || !Number.isInteger(data.id)) throw unexpected('la Prebill');
+        return data;
     }
 
     async remove(id) {

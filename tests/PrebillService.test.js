@@ -43,24 +43,52 @@ test('líneas, descuento, idioma y tipo de cambio validan antes de llamar', () =
     for (const v of [0, -1, '18', 1.1234567]) assert.throws(() => validateTipoCambio({ tipo_cambio: v }), undefined, String(v));
 });
 
-test('FASE 1: facturar no está permitido y no hay ruta para deshacer factura', () => {
-    assert.throws(() => validateEstado({ nuevo_estado: 'facturada' }), e => e.status === 403);
+test('facturar: solo desde autorizada; espera a Books hasta 27 s', async () => {
+    assert.deepEqual(validateEstado({ nuevo_estado: 'facturada' }), { nuevo_estado: 'facturada' });
     assert.throws(() => validateEstado({ nuevo_estado: 'borrador' }), e => e.status === 400);
-    assert.deepEqual(validateEstado({ nuevo_estado: 'autorizada' }), { nuevo_estado: 'autorizada' });
-    assert.equal(PrebillService.prototype.deshacerFactura, undefined);
+    let f = fixture({ ...prebill('en_revision') });
+    await assert.rejects(f.service.estado('7', { nuevo_estado: 'facturada' }), e => e.status === 409);
+    assert.equal(writes(f.calls).length, 0);
+    f = fixture({ ...prebill('autorizada'), 'get /prebills/7/vista-factura': { bloqueantes: [] }, 'post /prebills/7/estado': { id: 7, status: 'facturada', invoice_number: 'INV-1' } });
+    const r = await f.service.estado('7', { nuevo_estado: 'facturada' });
+    assert.equal(r.invoice_number, 'INV-1');
+    const w = writes(f.calls);
+    assert.deepEqual(w.map(c => [c.path, c.opts.data, c.opts.timeout]), [['/prebills/7/estado', { nuevo_estado: 'facturada' }, 27000]]);
+    // Respuesta sin id = incierta (puede haberse creado la factura)
+    f = fixture({ ...prebill('autorizada'), 'get /prebills/7/vista-factura': { bloqueantes: [] }, 'post /prebills/7/estado': {} });
+    await assert.rejects(f.service.estado('7', { nuevo_estado: 'facturada' }), e => e.outcome_unknown === true);
 });
 
-test('una Prebill facturada no se edita (cambiaría la factura en Books)', async () => {
-    for (const status of ['facturada', 'facturando']) {
-        const f = fixture(prebill(status));
-        await assert.rejects(f.service.lineas('7', { agregar_tiempo_id: [72] }), e => e.status === 409 && /Books/.test(e.message));
-        await assert.rejects(f.service.idioma('7', { idioma: 'en' }), e => e.status === 409);
-        await assert.rejects(f.service.tipoCambio('7', { tipo_cambio: 18 }), e => e.status === 409);
-        await assert.rejects(f.service.estado('7', { nuevo_estado: 'autorizada' }), e => e.status === 409);
-        await assert.rejects(f.service.remove('7'), e => e.status === 409);
-        await assert.rejects(f.service.descuentoAjuste('7', { descuento_tipo: '' }), e => e.status === 409);
-        assert.equal(writes(f.calls).length, 0, status);
-    }
+test('deshacer factura: solo facturada con la factura en borrador', async () => {
+    let f = fixture(prebill('autorizada'));
+    await assert.rejects(f.service.deshacerFactura('7'), e => e.status === 409);
+    f = fixture({ ...prebill('facturada'), 'get /prebills/7/edicion': { editable: false, etapa: 'bloqueada', motivo: 'La factura INV-000863 ya no se puede modificar' } });
+    await assert.rejects(f.service.deshacerFactura('7'), e => e.status === 409 && /INV-000863/.test(e.message));
+    assert.equal(writes(f.calls).length, 0);
+    f = fixture({ ...prebill('facturada'), 'get /prebills/7/edicion': { editable: true, etapa: 'factura_borrador' }, 'post /prebills/7/deshacer-factura': { id: 7, status: 'autorizada', factura_borrada: 'INV-1' } });
+    await f.service.deshacerFactura('7');
+    assert.deepEqual(writes(f.calls).map(c => [c.path, c.opts.timeout]), [['/prebills/7/deshacer-factura', 27000]]);
+});
+
+test('facturada: líneas e idioma solo con la factura en borrador (y actualizan Books)', async () => {
+    let f = fixture({ ...prebill('facturada'), 'get /prebills/7/edicion': { editable: false, etapa: 'bloqueada', motivo: 'ya se envió' } });
+    await assert.rejects(f.service.lineas('7', { agregar_tiempo_id: [72] }), e => e.status === 409 && /envió/.test(e.message));
+    await assert.rejects(f.service.idioma('7', { idioma: 'en' }), e => e.status === 409);
+    assert.equal(writes(f.calls).length, 0);
+    f = fixture({ ...prebill('facturada'), 'get /prebills/7/edicion': { editable: true, etapa: 'factura_borrador' } });
+    await f.service.lineas('7', { quitar_gasto_id: [24] });
+    await f.service.idioma('7', { idioma: 'en' });
+    assert.deepEqual(writes(f.calls).map(c => [c.path, c.opts.timeout]), [['/prebills/7/lineas', 27000], ['/prebills/7/idioma', 27000]]);
+    // Descuento, tipo de cambio, avanzar y borrar siguen sin tocar una facturada
+    await assert.rejects(f.service.descuentoAjuste('7', { descuento_tipo: '' }), e => e.status === 409);
+    await assert.rejects(f.service.tipoCambio('7', { tipo_cambio: 18 }), e => e.status === 409);
+    await assert.rejects(f.service.estado('7', { nuevo_estado: 'autorizada' }), e => e.status === 409);
+    await assert.rejects(f.service.remove('7'), e => e.status === 409);
+    assert.equal(writes(f.calls).length, 2);
+    // Facturándose: nada
+    f = fixture(prebill('facturando'));
+    await assert.rejects(f.service.lineas('7', { agregar_tiempo_id: [72] }), e => e.status === 409);
+    assert.equal(writes(f.calls).length, 0);
 });
 
 test('en estados editables se reenvía el cuerpo validado', async () => {

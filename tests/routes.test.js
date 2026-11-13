@@ -14,10 +14,12 @@ test('rutas: lecturas, validación sin red, facturar bloqueado y sin conexión 5
             assert.equal(r.status, 503, path);
             assert.equal((await r.json()).stage, 'connection');
         }
-        // Facturar y deshacer: nunca llegan a la API
+        // Facturar y deshacer existen (fase 2): sin conexión fallan antes de llegar a Books
         let r = await send('POST', '/prebills/7/estado', { nuevo_estado: 'facturada' });
-        assert.equal(r.status, 403);
-        assert.equal((await send('POST', '/prebills/7/deshacer-factura', {})).status, 404);
+        assert.equal(r.status, 503); assert.equal((await r.json()).outcome_unknown, false);
+        r = await send('POST', '/prebills/7/deshacer-factura', {});
+        assert.equal(r.status, 503); assert.equal((await r.json()).outcome_unknown, false);
+        assert.equal((await send('POST', '/prebills/7/estado', { nuevo_estado: 'borrador' })).status, 400);
         assert.equal((await send('GET', '/tarifas')).status, 404);
         r = await send('GET', '/a/b/c/d');
         assert.equal(r.status, 404); assert.equal((await r.json()).stage, undefined);
