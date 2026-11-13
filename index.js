@@ -43,6 +43,10 @@ export const CATALOGS = {
     proyectos: [],
     abogados: [],
     'liberado-disponible': ['cliente_id', 'moneda'],
+    // Para saber qué clientes tienen algo listo para Prebill (liberado, sin facturar ni asignar).
+    tiempos: ['liberado', 'facturado'],
+    gastos: ['liberado', 'facturado'],
+    'cargos-fijos': ['liberado', 'facturado'],
 };
 registerCatalogRoutes(app, CATALOGS);
 

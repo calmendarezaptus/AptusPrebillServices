@@ -18,7 +18,7 @@ test('rutas: lecturas, validación sin red, facturar bloqueado y sin conexión 5
         let r = await send('POST', '/prebills/7/estado', { nuevo_estado: 'facturada' });
         assert.equal(r.status, 403);
         assert.equal((await send('POST', '/prebills/7/deshacer-factura', {})).status, 404);
-        assert.equal((await send('GET', '/tiempos')).status, 404);
+        assert.equal((await send('GET', '/tarifas')).status, 404);
         r = await send('GET', '/a/b/c/d');
         assert.equal(r.status, 404); assert.equal((await r.json()).stage, undefined);
         // Validación antes de la red
