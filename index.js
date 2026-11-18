@@ -5,6 +5,7 @@
 import express from 'express';
 import dotenv from 'dotenv';
 import PrebillService from './services/PrebillService.js';
+import FormatoService from './services/FormatoService.js';
 import { registerCatalogRoutes } from './core/catalogs.js';
 import { sendError } from './core/http.js';
 
@@ -26,6 +27,15 @@ app.get('/:organizationId/prebills/:prebillId', route('Error interno consultando
 for (const what of ['disponible', 'movimientos', 'vista-factura', 'edicion']) {
     app.get(`/:organizationId/prebills/:prebillId/${what}`, route(`Error interno consultando ${what}.`, req => prebills(req).read(id(req), what)));
 }
+
+// Formato imprimible (PDF o HTML), solo lectura. Binario: no pasa por route() (que responde JSON).
+app.get('/:organizationId/prebills/:prebillId/formato', async (req, res) => {
+    try {
+        const f = await new FormatoService(req.params.organizationId, { req }).prebill(id(req), req.query);
+        res.set({ 'Content-Type': f.contentType, 'Content-Disposition': f.disposition, 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' });
+        return res.send(f.body);
+    } catch (error) { return sendError(res, error, 'Error interno generando el formato.'); }
+});
 
 // ── Escrituras (solo ReportesSandbox) ────────────────────────────────────────
 app.post('/:organizationId/prebills', route('Error interno creando la Prebill.', req => prebills(req).create(req.body), 201));

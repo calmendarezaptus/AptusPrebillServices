@@ -9,11 +9,13 @@ test('rutas: lecturas, validación sin red, facturar bloqueado y sin conexión 5
     const send = (method, path, body) => fetch(base + path, { method, headers: { 'content-type': 'application/json' }, body: body && JSON.stringify(body) });
     const original = console.error; console.error = () => {};
     try {
-        for (const path of [...Object.keys(CATALOGS), 'prebills/7', 'prebills/7/disponible', 'prebills/7/movimientos', 'prebills/7/vista-factura', 'prebills/7/edicion']) {
+        for (const path of [...Object.keys(CATALOGS), 'prebills/7', 'prebills/7/disponible', 'prebills/7/movimientos', 'prebills/7/vista-factura', 'prebills/7/edicion', 'prebills/7/formato', 'prebills/7/formato?formato=detallado&salida=html']) {
             const r = await send('GET', '/' + path);
             assert.equal(r.status, 503, path);
             assert.equal((await r.json()).stage, 'connection');
         }
+        assert.equal((await send('GET', '/prebills/7/formato?formato=resumen')).status, 400);
+        assert.equal((await send('GET', '/prebills/x/formato')).status, 400);
         // Facturar y deshacer existen (fase 2): sin conexión fallan antes de llegar a Books
         let r = await send('POST', '/prebills/7/estado', { nuevo_estado: 'facturada' });
         assert.equal(r.status, 503); assert.equal((await r.json()).outcome_unknown, false);
