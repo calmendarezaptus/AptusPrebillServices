@@ -15,6 +15,10 @@ test('rutas: lecturas, validación sin red, facturar bloqueado y sin conexión 5
             assert.equal((await r.json()).stage, 'connection');
         }
         assert.equal((await send('GET', '/prebills/7/formato?formato=resumen')).status, 400);
+        assert.equal((await send('GET', '/prebills/generar/vista-previa')).status, 503);
+        assert.equal((await send('GET', '/prebills/generar/vista-previa?desde=2026-10-01')).status, 400);
+        assert.equal((await send('POST', '/prebills/generar', { solicitud_id: 'gen-1234abcd' })).status, 400);
+        assert.equal((await send('POST', '/prebills/generar', { confirmar: true, solicitud_id: 'gen-1234abcd' })).status, 503);
         assert.equal((await send('GET', '/prebills/x/formato')).status, 400);
         // Facturar y deshacer existen (fase 2): sin conexión fallan antes de llegar a Books
         let r = await send('POST', '/prebills/7/estado', { nuevo_estado: 'facturada' });

@@ -6,6 +6,7 @@ import express from 'express';
 import dotenv from 'dotenv';
 import PrebillService from './services/PrebillService.js';
 import FormatoService from './services/FormatoService.js';
+import GeneracionService from './services/GeneracionService.js';
 import { registerCatalogRoutes } from './core/catalogs.js';
 import { sendError } from './core/http.js';
 
@@ -21,6 +22,11 @@ const route = (internalMessage, handler, status = 200) => async (req, res) => {
 };
 const prebills = req => new PrebillService(req.params.organizationId, { req });
 const id = req => req.params.prebillId;
+
+// ── Generación masiva (antes de /prebills/:prebillId para que "generar" no se tome como un ID) ──
+const generacion = req => new GeneracionService(req.params.organizationId, { req });
+app.get('/:organizationId/prebills/generar/vista-previa', route('Error interno armando la vista previa.', req => generacion(req).vistaPrevia(req.query)));
+app.post('/:organizationId/prebills/generar', route('Error interno generando las Prebills.', req => generacion(req).generar(req.body)));
 
 // ── Lecturas de una Prebill ──────────────────────────────────────────────────
 app.get('/:organizationId/prebills/:prebillId', route('Error interno consultando la Prebill.', req => prebills(req).get(id(req))));
